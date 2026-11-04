@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.IDex" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/shell_red</item>
+        <item name="android:statusBarColor">@color/shell_deep</item>
+        <item name="android:navigationBarColor">@color/shell_deep</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

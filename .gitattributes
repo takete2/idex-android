@@ -1,0 +1,6 @@
+*.onnx binary
+*.wav binary
+*.png binary
+*.otf binary
+*.ttf binary
+*.jar binary
