@@ -14,14 +14,26 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.camera.core.ImageCapture
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.content.ContextCompat
@@ -30,6 +42,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowLayoutInfo
+import dev.idex.android.audio.SpeechProblem
 import dev.idex.android.ui.CameraStatus
 import dev.idex.android.ui.DexBackHandler
 import dev.idex.android.ui.DexScaffold
@@ -77,10 +90,37 @@ private fun DexRoute(model: DexViewModel) {
         if (uri != null) model.importPhoto(uri)
     }
     val state = model.state
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(state.speechProblem) {
+        val problem = state.speechProblem ?: return@LaunchedEffect
+        val message = when (problem) {
+            SpeechProblem.NoEngine -> state.language.text(
+                "This phone has no text-to-speech engine, so entries can't be read aloud.",
+                "这台手机没有文字转语音引擎，无法朗读图鉴。",
+                "この端末には音声読み上げエンジンがないため、図鑑を読み上げられません。",
+            )
+            SpeechProblem.MissingVoice -> state.language.text(
+                "The voice for this language isn't installed, so the entry can't be read aloud.",
+                "未安装当前语言的语音，无法朗读图鉴。",
+                "この言語の音声データがないため、図鑑を読み上げられません。",
+            )
+        }
+        val action = state.language.text("Speech settings", "语音设置", "読み上げ設定")
+        val result = snackbarHostState.showSnackbar(
+            message = message,
+            actionLabel = action,
+            duration = SnackbarDuration.Long,
+        )
+        if (result == SnackbarResult.ActionPerformed) {
+            model.audio.openSystemSettings(context)
+        }
+        model.dismissSpeechProblem()
+    }
     fun cameraGranted() = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     val canRescan = state.viewfinder == Viewfinder.Result || (state.message != null && !state.isScanning)
 
     DexBackHandler(model.handlesBack()) { model.back() }
+    Box(Modifier.fillMaxSize()) {
     DexScaffold(
         state = state,
         catalog = model.catalog,
@@ -124,6 +164,13 @@ private fun DexRoute(model: DexViewModel) {
         onCameraFailed = model::onCameraFailed,
         onCaptureReady = { imageCapture = it },
     )
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(WindowInsets.safeDrawing),
+        )
+    }
 }
 
 private fun Context.findActivity(): Activity {

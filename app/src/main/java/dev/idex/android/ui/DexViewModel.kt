@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.idex.android.audio.DexAudio
+import dev.idex.android.audio.SpeechProblem
 import dev.idex.android.data.AppLanguage
 import dev.idex.android.data.DexPrefs
 import dev.idex.android.data.Pokemon
@@ -19,7 +20,6 @@ import dev.idex.android.recognition.RecognitionCandidate
 import dev.idex.android.recognition.loadCatalog
 import dev.idex.android.ui.sprites.SpriteStore
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -47,8 +47,7 @@ data class DexUiState(
     val showSettings: Boolean = false,
     val showStats: Boolean = false,
     val speaking: Boolean = false,
-    /** Short success glow for the blue lens. Speech can keep the lamp on after this ends. */
-    val lensPulse: Boolean = false,
+    val speechProblem: SpeechProblem? = null,
 )
 
 class DexViewModel(application: Application) : AndroidViewModel(application) {
@@ -72,12 +71,18 @@ class DexViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     private var generation = 0
-    private var lensGeneration = 0
+    private var speechWarningShown = false
 
     init {
         audio.start()
         audio.setSoundEnabled(state.soundEnabled)
         audio.onSpeaking = { speaking -> state = state.copy(speaking = speaking) }
+        audio.onSpeechUnavailable = { problem ->
+            if (!speechWarningShown) {
+                speechWarningShown = true
+                state = state.copy(speechProblem = problem)
+            }
+        }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { classifier.ensureLoaded() }
         }
@@ -211,16 +216,18 @@ class DexViewModel(application: Application) : AndroidViewModel(application) {
             candidates = emptyList(),
             confidence = null,
             identified = false,
-            lensPulse = false,
             speaking = false,
         )
         audio.playButton()
     }
 
+    fun dismissSpeechProblem() {
+        state = state.copy(speechProblem = null)
+    }
+
     fun scan(captureCamera: suspend () -> Bitmap) {
         if (state.isScanning) return
         val operation = ++generation
-        extinguishLens()
         viewModelScope.launch {
             state = state.copy(
                 isScanning = true,
@@ -228,7 +235,6 @@ class DexViewModel(application: Application) : AndroidViewModel(application) {
                 candidates = emptyList(),
                 confidence = null,
                 identified = false,
-                lensPulse = false,
             )
             audio.stopSpeaking()
             audio.playScan()
@@ -270,7 +276,6 @@ class DexViewModel(application: Application) : AndroidViewModel(application) {
     fun importPhoto(uri: Uri) {
         if (state.isScanning) return
         val operation = ++generation
-        extinguishLens()
         viewModelScope.launch {
             state = state.copy(
                 isScanning = true,
@@ -278,7 +283,6 @@ class DexViewModel(application: Application) : AndroidViewModel(application) {
                 candidates = emptyList(),
                 confidence = null,
                 identified = false,
-                lensPulse = false,
                 source = ScanSource.Photo,
             )
             audio.stopSpeaking()
@@ -323,10 +327,8 @@ class DexViewModel(application: Application) : AndroidViewModel(application) {
         val match = result.candidates.firstOrNull()
         val pokemon = match?.let { catalog.pokemon(it.dexId) }
         if (match == null || pokemon == null) {
-            extinguishLens()
             state = state.copy(
                 isScanning = false,
-                lensPulse = false,
                 identified = false,
                 message = text(
                     "Recognition is unavailable. Restart iDex and try again.",
@@ -342,14 +344,12 @@ class DexViewModel(application: Application) : AndroidViewModel(application) {
         val seen = if (accepted) state.seenIds + pokemon.id else state.seenIds
         if (accepted) prefs.setSeen(seen)
         review = null
-        val pulseGeneration = if (accepted) ++lensGeneration else lensGeneration
         state = state.copy(
             isScanning = false,
             viewfinder = Viewfinder.Result,
             candidates = result.candidates,
             confidence = match.confidence,
             identified = accepted,
-            lensPulse = accepted,
             seenIds = seen,
             showEntry = false,
             message = if (accepted) {
@@ -363,15 +363,9 @@ class DexViewModel(application: Application) : AndroidViewModel(application) {
             },
         )
         if (accepted) {
-            viewModelScope.launch {
-                delay(LensLights.SUCCESS_PULSE_MS)
-                if (pulseGeneration == lensGeneration) {
-                    state = state.copy(lensPulse = false)
-                }
-            }
             audio.announce(pokemon, state.language)
         } else {
-            extinguishLens()
+            audio.stopSpeaking()
             audio.playButton()
         }
     }
@@ -395,24 +389,15 @@ class DexViewModel(application: Application) : AndroidViewModel(application) {
             candidates = emptyList(),
             confidence = null,
             identified = false,
-            lensPulse = false,
             speaking = false,
             isScanning = false,
         )
     }
 
-    private fun extinguishLens() {
-        lensGeneration++
-        if (state.lensPulse || state.speaking) {
-            state = state.copy(lensPulse = false, speaking = false)
-        }
-    }
-
     private fun cancelWork() {
         generation++
-        extinguishLens()
         audio.stopAll()
-        state = state.copy(isScanning = false, lensPulse = false, speaking = false)
+        state = state.copy(isScanning = false, speaking = false)
     }
 
     override fun onCleared() {

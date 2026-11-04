@@ -1,6 +1,7 @@
 package dev.idex.android.audio
 
 import android.content.Context
+import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
@@ -9,11 +10,15 @@ import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import dev.idex.android.data.AppLanguage
 import dev.idex.android.data.Pokemon
+import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.PI
 import kotlin.math.sin
+
+enum class SpeechProblem { NoEngine, MissingVoice }
 
 /** Local chimes, bundled cries, and the system speech engine. No network. */
 class DexAudio(context: Context) {
@@ -23,20 +28,43 @@ class DexAudio(context: Context) {
     private var speech: TextToSpeech? = null
     private var player: MediaPlayer? = null
     private var soundEnabled: Boolean = true
+    private var ready = false
+    private var failed = false
+    private var started = false
+    private var pending: QueuedUtterance? = null
+    private var utteranceSerial = 0
+    private var activeUtterance: String? = null
+
     var onSpeaking: (Boolean) -> Unit = {}
+    var onSpeechUnavailable: (SpeechProblem) -> Unit = {}
 
     fun start() {
-        if (speech != null) return
-        speech = TextToSpeech(appContext) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                speech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) = report(true)
-                    override fun onDone(utteranceId: String?) = report(false)
-                    @Deprecated("Deprecated in Java")
-                    override fun onError(utteranceId: String?) = report(false)
-                    override fun onError(utteranceId: String?, errorCode: Int) = report(false)
-                })
+        if (started) return
+        started = true
+        try {
+            speech = TextToSpeech(appContext) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    ready = true
+                    speech?.setOnUtteranceProgressListener(progressListener)
+                    Log.i(TAG, "TextToSpeech ready, engines visible")
+                    val queued = pending
+                    pending = null
+                    if (queued != null && soundEnabled) speakOnMain(queued.text, queued.language)
+                } else {
+                    ready = false
+                    failed = true
+                    Log.e(TAG, "TextToSpeech init failed, status=$status. Check TTS_SERVICE package visibility.")
+                    val hadPending = pending != null
+                    pending = null
+                    report(false)
+                    if (hadPending) reportUnavailable(SpeechProblem.NoEngine)
+                }
             }
+        } catch (error: Exception) {
+            failed = true
+            ready = false
+            Log.e(TAG, "TextToSpeech constructor failed", error)
+            reportUnavailable(SpeechProblem.NoEngine)
         }
     }
 
@@ -59,13 +87,12 @@ class DexAudio(context: Context) {
     }
 
     fun speak(text: String, language: AppLanguage) {
-        if (!soundEnabled || text.isBlank()) return
-        val engine = speech ?: return
-        engine.language = language.speechLocale()
-        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "idex-entry")
+        main.post { speakOnMain(text, language) }
     }
 
     fun stopSpeaking() {
+        pending = null
+        activeUtterance = null
         speech?.stop()
         report(false)
     }
@@ -85,14 +112,96 @@ class DexAudio(context: Context) {
         stopAll()
         speech?.shutdown()
         speech = null
+        ready = false
         executor.shutdown()
+    }
+
+    fun openSystemSettings(context: Context) {
+        val flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        val settings = Intent("com.android.settings.TTS_SETTINGS").addFlags(flags)
+        val install = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).addFlags(flags)
+        val opened = runCatching { context.startActivity(settings) }.isSuccess
+        if (!opened) {
+            runCatching { context.startActivity(install) }
+                .onFailure { Log.e(TAG, "Could not open TTS settings", it) }
+        }
+    }
+
+    private fun speakOnMain(text: String, language: AppLanguage) {
+        if (!soundEnabled || text.isBlank()) return
+        if (failed) {
+            reportUnavailable(SpeechProblem.NoEngine)
+            report(false)
+            return
+        }
+        val engine = speech
+        if (!ready || engine == null) {
+            pending = QueuedUtterance(text, language)
+            Log.i(TAG, "Queuing speech until TextToSpeech is ready")
+            return
+        }
+        if (!applyLanguage(engine, language)) {
+            reportUnavailable(SpeechProblem.MissingVoice)
+            report(false)
+            return
+        }
+        val utteranceId = "idex-${++utteranceSerial}"
+        activeUtterance = utteranceId
+        val result = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        if (result == TextToSpeech.ERROR) {
+            Log.e(TAG, "speak() returned ERROR for $utteranceId")
+            if (activeUtterance == utteranceId) activeUtterance = null
+            report(false)
+            reportUnavailable(SpeechProblem.NoEngine)
+        }
+    }
+
+    private fun applyLanguage(engine: TextToSpeech, language: AppLanguage): Boolean {
+        val attempts = TtsVoices.candidates(language.speechLocale(), Locale.getDefault())
+        for (locale in attempts) {
+            val result = engine.setLanguage(locale)
+            Log.i(TAG, "setLanguage ${locale.toLanguageTag()} -> $result")
+            if (TtsVoices.usable(result)) return true
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                Log.w(TAG, "Voice unavailable for ${locale.toLanguageTag()} (result=$result)")
+            }
+        }
+        Log.e(TAG, "No usable TTS voice for ${language.speechTag}")
+        return false
+    }
+
+    private val progressListener = object : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String?) {
+            if (utteranceId != null && utteranceId == activeUtterance) report(true)
+        }
+
+        override fun onDone(utteranceId: String?) = finish(utteranceId)
+
+        @Deprecated("Deprecated in Java")
+        override fun onError(utteranceId: String?) {
+            Log.e(TAG, "TTS error for $utteranceId")
+            finish(utteranceId)
+        }
+
+        override fun onError(utteranceId: String?, errorCode: Int) {
+            Log.e(TAG, "TTS error $errorCode for $utteranceId")
+            finish(utteranceId)
+        }
+
+        private fun finish(utteranceId: String?) {
+            if (utteranceId != null && utteranceId == activeUtterance) {
+                activeUtterance = null
+                report(false)
+            }
+        }
     }
 
     private fun playCry(id: Int, then: () -> Unit) {
         executor.execute {
+            var descriptor: android.content.res.AssetFileDescriptor? = null
             try {
-                val formatted = "%03d".format(id)
-                val afd = appContext.assets.openFd("cries/$formatted.wav")
+                val path = "cries/%03d.wav".format(id)
+                descriptor = appContext.assets.openFd(path)
                 val media = MediaPlayer()
                 media.setAudioAttributes(
                     AudioAttributes.Builder()
@@ -100,22 +209,27 @@ class DexAudio(context: Context) {
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .build(),
                 )
-                media.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                afd.close()
+                media.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
                 media.setOnCompletionListener {
                     it.release()
                     if (player == it) player = null
                     main.post(then)
                 }
-                media.setOnErrorListener { mp, _, _ ->
+                media.setOnErrorListener { mp, what, extra ->
+                    Log.e(TAG, "Cry player error what=$what extra=$extra id=$id")
                     mp.release()
+                    if (player == mp) player = null
                     main.post(then)
                     true
                 }
                 media.prepare()
+                descriptor.close()
+                descriptor = null
                 player = media
                 media.start()
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                Log.e(TAG, "Cry playback failed for $id. WAV assets must stay uncompressed for openFd.", error)
+                runCatching { descriptor?.close() }
                 main.post(then)
             }
         }
@@ -123,6 +237,10 @@ class DexAudio(context: Context) {
 
     private fun report(speaking: Boolean) {
         main.post { onSpeaking(speaking) }
+    }
+
+    private fun reportUnavailable(problem: SpeechProblem) {
+        main.post { onSpeechUnavailable(problem) }
     }
 
     private fun blip(frequency: Double, seconds: Double) {
@@ -170,5 +288,11 @@ class DexAudio(context: Context) {
             Thread.currentThread().interrupt()
         }
         track.release()
+    }
+
+    private data class QueuedUtterance(val text: String, val language: AppLanguage)
+
+    companion object {
+        private const val TAG = "iDex"
     }
 }

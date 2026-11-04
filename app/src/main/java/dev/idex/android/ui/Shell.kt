@@ -1,10 +1,6 @@
 package dev.idex.android.ui
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -148,38 +144,13 @@ fun Indicator(color: Color, lit: Boolean, modifier: Modifier = Modifier, size: D
 }
 
 @Composable
-fun Lens(lit: Boolean, pulsing: Boolean = false, modifier: Modifier = Modifier) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val reduceMotion = remember {
-        runCatching {
-            android.provider.Settings.Global.getFloat(
-                context.contentResolver,
-                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
-                1f,
-            ) == 0f
-        }.getOrDefault(false)
-    }
+fun Lens(lit: Boolean, modifier: Modifier = Modifier) {
     val glow by animateFloatAsState(
         targetValue = if (lit) 1f else 0f,
-        animationSpec = tween(durationMillis = if (lit) 160 else 280),
+        animationSpec = tween(durationMillis = if (lit) 160 else 220),
         label = "lens-glow",
     )
-    val throb = if (lit && pulsing && !reduceMotion) {
-        val transition = rememberInfiniteTransition(label = "lens-pulse")
-        val level by transition.animateFloat(
-            initialValue = 0.45f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(420),
-                repeatMode = RepeatMode.Reverse,
-            ),
-            label = "lens-throb",
-        )
-        level
-    } else {
-        1f
-    }
-    val intensity = glow * throb
+    val intensity = glow
     Box(
         modifier
             .size(70.dp)

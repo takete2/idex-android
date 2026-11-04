@@ -98,12 +98,7 @@ fun ScannerPane(
             .padding(horizontal = 18.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            ScannerLights(
-                scanning = state.isScanning,
-                speaking = state.speaking,
-                identified = state.identified,
-                pulse = state.lensPulse,
-            )
+            ScannerLights(scanning = state.isScanning, speaking = state.speaking)
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                 PixelText(language.text("POKÉDEX", "宝可梦图鉴", "ポケモン図鑑"), language, 10, color = DexColors.Cream)
@@ -338,14 +333,14 @@ private fun MessageCard(message: String, language: dev.idex.android.data.AppLang
 }
 
 @Composable
-private fun ScannerLights(scanning: Boolean, speaking: Boolean, identified: Boolean, pulse: Boolean) {
+private fun ScannerLights(scanning: Boolean, speaking: Boolean) {
     val context = LocalContext.current
     val reduceMotion = remember {
         runCatching {
             Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
         }.getOrDefault(false)
     }
-    val lensLit = LensLights.isLit(identified, speaking, pulse)
+    val lensLit = LensLights.isLit(speaking)
     var active by remember { mutableIntStateOf(0) }
     val chasing = scanning && !lensLit && !reduceMotion
     LaunchedEffect(chasing) {
@@ -356,7 +351,7 @@ private fun ScannerLights(scanning: Boolean, speaking: Boolean, identified: Bool
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Lens(lit = lensLit, pulsing = pulse && identified)
+        Lens(lit = lensLit)
         Spacer(Modifier.width(8.dp))
         Column {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
