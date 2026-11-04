@@ -98,7 +98,12 @@ fun ScannerPane(
             .padding(horizontal = 18.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            ScannerLights(scanning = state.isScanning, speaking = state.speaking)
+            ScannerLights(
+                scanning = state.isScanning,
+                speaking = state.speaking,
+                identified = state.identified,
+                pulse = state.lensPulse,
+            )
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                 PixelText(language.text("POKÉDEX", "宝可梦图鉴", "ポケモン図鑑"), language, 10, color = DexColors.Cream)
@@ -333,15 +338,16 @@ private fun MessageCard(message: String, language: dev.idex.android.data.AppLang
 }
 
 @Composable
-private fun ScannerLights(scanning: Boolean, speaking: Boolean) {
+private fun ScannerLights(scanning: Boolean, speaking: Boolean, identified: Boolean, pulse: Boolean) {
     val context = LocalContext.current
     val reduceMotion = remember {
         runCatching {
             Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
         }.getOrDefault(false)
     }
+    val lensLit = LensLights.isLit(identified, speaking, pulse)
     var active by remember { mutableIntStateOf(0) }
-    val chasing = scanning && !speaking && !reduceMotion
+    val chasing = scanning && !lensLit && !reduceMotion
     LaunchedEffect(chasing) {
         if (!chasing) return@LaunchedEffect
         while (true) {
@@ -350,12 +356,12 @@ private fun ScannerLights(scanning: Boolean, speaking: Boolean) {
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Lens(lit = speaking)
+        Lens(lit = lensLit, pulsing = pulse && identified)
         Spacer(Modifier.width(8.dp))
         Column {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(Color.Red, Color.Yellow, Color(0xFF3DDC84)).forEachIndexed { index, color ->
-                    Indicator(color, lit = scanning && !speaking && (reduceMotion || index == active))
+                    Indicator(color, lit = scanning && !lensLit && (reduceMotion || index == active))
                 }
             }
             Wordmark()

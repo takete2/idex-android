@@ -1,5 +1,11 @@
 package dev.idex.android.ui
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -34,6 +40,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -140,23 +148,77 @@ fun Indicator(color: Color, lit: Boolean, modifier: Modifier = Modifier, size: D
 }
 
 @Composable
-fun Lens(lit: Boolean, modifier: Modifier = Modifier) {
+fun Lens(lit: Boolean, pulsing: Boolean = false, modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val reduceMotion = remember {
+        runCatching {
+            android.provider.Settings.Global.getFloat(
+                context.contentResolver,
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            ) == 0f
+        }.getOrDefault(false)
+    }
+    val glow by animateFloatAsState(
+        targetValue = if (lit) 1f else 0f,
+        animationSpec = tween(durationMillis = if (lit) 160 else 280),
+        label = "lens-glow",
+    )
+    val throb = if (lit && pulsing && !reduceMotion) {
+        val transition = rememberInfiniteTransition(label = "lens-pulse")
+        val level by transition.animateFloat(
+            initialValue = 0.45f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(420),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "lens-throb",
+        )
+        level
+    } else {
+        1f
+    }
+    val intensity = glow * throb
     Box(
         modifier
-            .size(64.dp)
-            .shadow(3.dp, CircleShape)
-            .background(Brush.linearGradient(listOf(Color.White, Color(0xFF808080), Color(0xFFD9D9D9))), CircleShape)
-            .padding(6.dp)
-            .background(Color(0xFF222222), CircleShape)
-            .padding(3.dp)
-            .background(
-                Brush.radialGradient(
-                    if (lit) listOf(Color(0xFFC7FFFF), Color(0xFF08D4FF), Color(0xFF0566A6))
-                    else listOf(Color(0xFF266374), Color(0xFF053B4F), Color(0xFF031A30)),
-                ),
-                CircleShape,
+            .size(70.dp)
+            .shadow(
+                elevation = (16f * intensity).dp,
+                shape = CircleShape,
+                ambientColor = Color(0xFF7EFFFF),
+                spotColor = Color(0xFF08D4FF),
             ),
-    )
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Brush.linearGradient(listOf(Color.White, Color(0xFF808080), Color(0xFFD9D9D9))), CircleShape)
+                .padding(6.dp)
+                .background(Color(0xFF222222), CircleShape)
+                .padding(4.dp)
+                .background(
+                    Brush.radialGradient(
+                        listOf(
+                            lerp(Color(0xFF266374), Color(0xFFC7FFFF), intensity),
+                            lerp(Color(0xFF053B4F), Color(0xFF08D4FF), intensity),
+                            lerp(Color(0xFF031A30), Color(0xFF0566A6), intensity),
+                        ),
+                    ),
+                    CircleShape,
+                ),
+        )
+        if (intensity > 0.05f) {
+            Box(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 16.dp, top = 14.dp)
+                    .size(width = 22.dp, height = 10.dp)
+                    .graphicsLayer { rotationZ = -40f; alpha = 0.35f + 0.55f * intensity }
+                    .background(Color.White, CircleShape),
+            )
+        }
+    }
 }
 
 @Composable
