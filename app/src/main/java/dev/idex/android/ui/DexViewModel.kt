@@ -341,15 +341,15 @@ class DexViewModel(application: Application) : AndroidViewModel(application) {
         }
         select(pokemon.id)
         val accepted = result.accepted != null
-        val seen = if (accepted) state.seenIds + pokemon.id else state.seenIds
-        if (accepted) prefs.setSeen(seen)
+        val seen = if (ScanFeedback.markSeen(accepted)) state.seenIds + pokemon.id else state.seenIds
+        if (ScanFeedback.markSeen(accepted)) prefs.setSeen(seen)
         review = null
         state = state.copy(
             isScanning = false,
             viewfinder = Viewfinder.Result,
             candidates = result.candidates,
             confidence = match.confidence,
-            identified = accepted,
+            identified = ScanFeedback.identified(accepted),
             seenIds = seen,
             showEntry = false,
             message = if (accepted) {
@@ -362,11 +362,8 @@ class DexViewModel(application: Application) : AndroidViewModel(application) {
                 )
             },
         )
-        if (accepted) {
+        if (ScanFeedback.announce(hasMatch = true)) {
             audio.announce(pokemon, state.language)
-        } else {
-            audio.stopSpeaking()
-            audio.playButton()
         }
     }
 
